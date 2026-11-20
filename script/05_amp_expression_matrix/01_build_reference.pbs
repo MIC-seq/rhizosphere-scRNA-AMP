@@ -1,0 +1,35 @@
+### define PBS arguments
+#PBS -N scamp_ref
+#PBS -l nodes=1:ppn=64,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o logs/01_build_reference.log
+
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/10_scAMP_8samples
+SCRIPTS="$ROOT/scripts"
+OUT="$ROOT/01_reference"
+mkdir -p "$OUT/mmseqs_tmp" "$ROOT/logs"
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate metagenome
+
+python3 "$SCRIPTS/prepare_reference.py" \
+  --apd6 /public2/labmember/wyc_rawdata/amp/ref_apd6/apd6_clean.faa \
+  --ampsphere /public2/labmember/wyc_rawdata/amp/ref_ampsphere/AMP_fullinfo.fa \
+  --novel /public3/labmember/qianqh/soil_amp_analysis/AMP_four_model_consensus_out/fasta/candidates_at_least_2_of_4.faa \
+  --out-fasta "$OUT/all_amp.tagged.faa" \
+  --out-records "$OUT/all_amp.input_records.tsv"
+
+mmseqs createdb "$OUT/all_amp.tagged.faa" "$OUT/all_amp_DB"
+mmseqs cluster "$OUT/all_amp_DB" "$OUT/all_amp_DB_clu" "$OUT/mmseqs_tmp" \
+  --min-seq-id 0.9 -c 0.9 --cov-mode 1 --threads 64
+mmseqs createtsv "$OUT/all_amp_DB" "$OUT/all_amp_DB" "$OUT/all_amp_DB_clu" "$OUT/all_amp_DB_clu.tsv"
+
+python3 "$SCRIPTS/finalize_reference.py" \
+  --records "$OUT/all_amp.input_records.tsv" \
+  --clusters "$OUT/all_amp_DB_clu.tsv" \
+  --tagged-fasta "$OUT/all_amp.tagged.faa" \
+  --outdir "$OUT"
+
+diamond makedb --in "$OUT/amp_reference_nr.faa" -d "$OUT/amp_reference_nr" --threads 64
+date

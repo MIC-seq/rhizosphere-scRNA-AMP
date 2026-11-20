@@ -1,0 +1,85 @@
+### define PBS arguments
+#PBS -N assembly_smRNA
+#PBS -l nodes=1:ppn=64,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o assembly_rnaspades_smRNA.log
+
+set -euo pipefail
+shopt -s nullglob
+
+echo "the starting time is:"
+date
+hostname
+
+cd "$PBS_O_WORKDIR"
+
+# activate micromamba
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate metatranscriptome
+
+THREADS=64
+MEMORY=200
+
+# 输入目录：STAR 去 rRNA 后结果
+INDIR="${PBS_O_WORKDIR}/1_star_rrna_out"
+
+# 输出目录：和当前 PBS 脚本所在目录同级生成
+OUTDIR="${PBS_O_WORKDIR}/2_assembly_rnaspades"
+
+mkdir -p "${OUTDIR}"
+
+echo "Working directory: ${PBS_O_WORKDIR}"
+echo "Input directory  : ${INDIR}"
+echo "Output directory : ${OUTDIR}"
+echo "Threads          : ${THREADS}"
+echo "Memory           : ${MEMORY} GB"
+echo
+
+for crop in rice soybean wheat
+do
+    echo "========== Processing crop: ${crop} =========="
+
+    CROP_INDIR="${INDIR}/${crop}/non_rrna"
+    CROP_OUTDIR="${OUTDIR}/${crop}"
+
+    if [[ ! -d "${CROP_INDIR}" ]]; then
+        echo "[WARN] Input directory not found, skip: ${CROP_INDIR}"
+        continue
+    fi
+
+    mkdir -p "${CROP_OUTDIR}"
+
+    # 只使用 R2 端进行组装，因为 R1 是 BC + UMI
+    for fq in "${CROP_INDIR}"/*_non_rRNA.R2.fq
+    do
+        sample=$(basename "${fq}" _non_rRNA.R2.fq)
+
+        SAMPLE_OUTDIR="${CROP_OUTDIR}/rnaspades_${sample}"
+
+        echo "Processing ${crop} sample assembly: ${sample}"
+        echo "Input R2: ${fq}"
+        echo "Output  : ${SAMPLE_OUTDIR}"
+
+        # 如果已经有组装结果，则跳过，避免重复跑
+        if [[ -s "${SAMPLE_OUTDIR}/transcripts.fasta" ]]; then
+            echo "[SKIP] Assembly already exists: ${SAMPLE_OUTDIR}/transcripts.fasta"
+            echo
+            continue
+        fi
+
+        rnaspades.py \
+            -s "${fq}" \
+            -o "${SAMPLE_OUTDIR}" \
+            -t "${THREADS}" \
+            -m "${MEMORY}"
+
+        echo "Finished assembly: ${crop}/${sample}"
+        echo
+    done
+done
+
+echo "the finish time is:"
+date
+echo
+echo

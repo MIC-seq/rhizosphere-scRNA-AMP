@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -N ampscanner_v2
+#PBS -l nodes=1:ppn=8
+#PBS -l walltime=06:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o /public3/labmember/qianqh/soil_amp_analysis/AMPScannerV2_out/ampscanner_v2.pbs.log
+
+set -euo pipefail
+REPO=/public/home/qianqh/softpath/amp-scanner-v2
+PYTHON=/public/home/qianqh/softpath/ascan2_env/bin/python
+INPUT=/public3/labmember/qianqh/soil_amp_analysis/6_smORF_filter/blastp/smORF_prefiltered.faa
+OUT=/public3/labmember/qianqh/soil_amp_analysis/AMPScannerV2_out
+
+mkdir -p "$OUT"
+cd "$REPO"
+"$PYTHON" amp_scanner_v2_predict_tf1.py \
+  -f "$INPUT" \
+  -m trained-models/021820_FULL_MODEL.h5 \
+  -t 0.5 \
+  -c "$OUT/AMPScannerV2_candidates.fasta" \
+  -p "$OUT/AMPScannerV2_predictions.csv"
+
+echo "AMP Scanner v2 completed: $(date)"

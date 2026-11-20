@@ -1,0 +1,118 @@
+### define PBS arguments
+#PBS -N sm_tax_anno
+#PBS -l nodes=1:ppn=64,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o anno_sm_taxonomy.log
+
+set -euo pipefail
+shopt -s nullglob
+
+echo "the starting time is:"
+date
+hostname
+
+cd "$PBS_O_WORKDIR"
+
+# activate micromamba
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate metagenome
+
+THREADS=64
+
+# =========================
+# input and output dirs
+# =========================
+ASSEMBLY_DIR="${PBS_O_WORKDIR}/2_assembly_rnaspades"
+ANNOTATION_DIR="${PBS_O_WORKDIR}/9_taxonomy_anno"
+
+GTDB_DB=/public2/labmember/qianqh/sc_microbio/GTDB_db/gtdb_r226
+
+mkdir -p "${ANNOTATION_DIR}"
+
+echo "Working directory   : ${PBS_O_WORKDIR}"
+echo "Assembly directory  : ${ASSEMBLY_DIR}"
+echo "Annotation directory: ${ANNOTATION_DIR}"
+echo "GTDB database       : ${GTDB_DB}"
+echo "Threads             : ${THREADS}"
+echo
+
+if [[ ! -d "${ASSEMBLY_DIR}" ]]; then
+    echo "[ERROR] Assembly directory not found: ${ASSEMBLY_DIR}"
+    exit 1
+fi
+
+echo "Annotating rnaSPAdes transcripts with MMseqs2 taxonomy..."
+
+for crop in rice soybean wheat
+do
+    echo "========== Processing crop: ${crop} =========="
+
+    CROP_ASM_DIR="${ASSEMBLY_DIR}/${crop}"
+    CROP_ANNO_DIR="${ANNOTATION_DIR}/${crop}"
+
+    if [[ ! -d "${CROP_ASM_DIR}" ]]; then
+        echo "[WARN] Assembly crop directory not found, skip: ${CROP_ASM_DIR}"
+        continue
+    fi
+
+    mkdir -p "${CROP_ANNO_DIR}"
+
+    for sample_dir in "${CROP_ASM_DIR}"/rnaspades_*
+    do
+        if [[ ! -d "${sample_dir}" ]]; then
+            continue
+        fi
+
+        sample=$(basename "${sample_dir}" | sed 's/^rnaspades_//')
+        transcripts="${sample_dir}/transcripts.fasta"
+
+        if [[ ! -s "${transcripts}" ]]; then
+            echo "[WARN] transcripts.fasta not found or empty, skip: ${crop}/${sample}"
+            continue
+        fi
+
+        echo "Processing taxonomy annotation: ${crop}/${sample}"
+        echo "Input transcripts: ${transcripts}"
+
+        QUERY_DB="${CROP_ANNO_DIR}/${sample}_transcriptsDB"
+        TAX_RESULT="${CROP_ANNO_DIR}/${sample}_taxonomy"
+        TMP_DIR="${CROP_ANNO_DIR}/tmp_${sample}"
+        OUT_TSV="${CROP_ANNO_DIR}/${sample}_taxonomy.tsv"
+
+        # 如果已有结果，跳过
+        if [[ -s "${OUT_TSV}" ]]; then
+            echo "[SKIP] Taxonomy result exists: ${OUT_TSV}"
+            echo
+            continue
+        fi
+
+        mmseqs createdb \
+            "${transcripts}" \
+            "${QUERY_DB}"
+
+        mmseqs taxonomy \
+            "${QUERY_DB}" \
+            "${GTDB_DB}" \
+            "${TAX_RESULT}" \
+            "${TMP_DIR}" \
+            --threads "${THREADS}" \
+            --tax-lineage 1 \
+            --search-type 2
+
+        mmseqs createtsv \
+            "${QUERY_DB}" \
+            "${TAX_RESULT}" \
+            "${OUT_TSV}"
+
+        echo "Finished taxonomy annotation: ${crop}/${sample}"
+        echo "Output: ${OUT_TSV}"
+        echo
+
+    done
+done
+
+echo "the finish time is:"
+date
+echo
+echo

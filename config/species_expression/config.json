@@ -1,0 +1,93 @@
+{
+  "project": {
+    "remote_root": "/path/to/species_expression",
+    "sample_manifest": "config/samples.tsv"
+  },
+  "software": {
+    "rscript": "/path/to/Rscript"
+  },
+  "barcode": {
+    "r1_cell_barcode_start_1based": 1,
+    "cell_barcode_length": 20,
+    "r1_umi_start_1based": 21,
+    "umi_length": 8,
+    "read_id_suffix_regex": "_([ACGTN]{20})_([ACGTN]{8})$",
+    "whitelist_correction": "reuse_umi_tools_extracted_reads"
+  },
+  "species_filter": {
+    "required_rank": "species",
+    "min_samples": 3,
+    "min_total_cells": 300,
+    "min_cells_per_sample": 50,
+    "min_samples_at_cell_threshold": 2,
+    "excluded_taxids": [9606]
+  },
+  "mapping_reference_filter": {
+    "operator": "union",
+    "min_global_cell_fraction": 0.001,
+    "min_max_sample_cell_fraction": 0.005,
+    "min_sample_prevalence_fraction": 0.875,
+    "max_species": 250,
+    "exclude_taxids": [9606]
+  },
+  "refseq": {
+    "assemblies_per_species_initial": 1,
+    "assemblies_per_species_fallback_min": 2,
+    "assemblies_per_species_fallback_max": 5,
+    "allowed_assembly_levels": ["Complete Genome", "Chromosome", "Scaffold", "Contig"],
+    "exclude_anomalous": true,
+    "exclude_contaminated": true,
+    "require_gff": true,
+    "require_faa": false,
+    "annotation_extension": "_genomic.gtf.gz",
+    "protein_strategy": "translate_CDS_from_GTF_and_genomic_FASTA",
+    "require_exact_species_taxid": true
+    ,"selection_column": "mapping_selected"
+  },
+  "mapping": {
+    "aligner": "STAR",
+    "threads": 16,
+    "max_intron_length": 1,
+    "max_multimaps": 20,
+    "count_unique_only": true,
+    "ambiguous_molecule_policy": "discard",
+    "exclude_feature_types": ["rRNA", "tRNA"]
+  },
+  "directed_mapping": {
+    "enabled": true,
+    "target_selection_column": "analysis_selected",
+    "minimum_target_cells_per_sample": 10,
+    "gzip_compresslevel": 1
+  },
+  "cell_qc": {
+    "min_non_rrna_umi": 5,
+    "min_detected_non_rrna_genes": 3,
+    "min_unique_mapping_fraction": 0.005,
+    "max_cross_species_umi_fraction": 0.5,
+    "min_kraken_species_umi_fraction": 0.5
+  },
+  "amp_analysis": {
+    "scale_factor": 10000,
+    "high_quantile": 0.8,
+    "low_quantile": 0.2,
+    "stable_amp_min_umi": 2,
+    "min_samples": 3,
+    "min_cells_per_state_per_sample": 10,
+    "matching_max_standardized_distance": 1.5,
+    "matching_covariates": ["sample", "total_non_rrna_umi", "detected_genes", "batch"]
+  },
+  "differential_expression": {
+    "method": "edgeR",
+    "design": "~ sample + AMP_state",
+    "fdr": 0.05,
+    "abs_log2fc": 0.5,
+    "min_cpm": 1,
+    "min_replicates_expressed": 3
+  },
+  "amp_gene_exclusion": {
+    "amp_reference_faa": "/path/to/amp_expression/01_reference/amp_reference_nr.faa",
+    "min_identity_percent": 80,
+    "min_query_coverage_percent": 80,
+    "max_evalue": 1e-5
+  }
+}

@@ -1,0 +1,202 @@
+### define PBS arguments
+#PBS -N smORF_filter_sm
+#PBS -l nodes=1:ppn=32,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o smORF_filter.log
+
+set -euo pipefail
+
+echo "the starting time is:"
+date
+hostname
+
+cd "$PBS_O_WORKDIR"
+
+# activate micromamba
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate amp_env
+
+# =========================
+# parameters
+# =========================
+THREADS=32
+
+WORKDIR="$PBS_O_WORKDIR"
+
+ANTIFAM_DB=/public/home/qianqh/softwares/antifam/AntiFam.hmm
+DIAMOND_DB=/public2/labmember/qianqh/sc_microbio/uniprot_db/sub_db/uniprot_bac_arc_vir
+
+AMP_FASTA="${WORKDIR}/4_nr/all_smorfs_10_100.nr.faa"
+
+FILTER_BASEDIR="${WORKDIR}/6_smORF_filter"
+ANTIFAM_OUT="${FILTER_BASEDIR}/antifam"
+BLASTP_OUT="${FILTER_BASEDIR}/blastp"
+
+mkdir -p "${ANTIFAM_OUT}"
+mkdir -p "${BLASTP_OUT}"
+
+echo "Working directory : ${WORKDIR}"
+echo "Input peptide file: ${AMP_FASTA}"
+echo "AntiFam database  : ${ANTIFAM_DB}"
+echo "DIAMOND database  : ${DIAMOND_DB}"
+echo "Output directory  : ${FILTER_BASEDIR}"
+echo "Threads           : ${THREADS}"
+echo
+
+if [[ ! -s "${AMP_FASTA}" ]]; then
+    echo "[ERROR] Input fasta not found or empty: ${AMP_FASTA}"
+    exit 1
+fi
+
+if [[ ! -f "${ANTIFAM_DB}" ]]; then
+    echo "[ERROR] AntiFam database not found: ${ANTIFAM_DB}"
+    exit 1
+fi
+
+# =========================
+# STEP1: AntiFam filter
+# =========================
+echo "========== STEP1: AntiFam filter =========="
+
+hmmsearch \
+  --cut_ga \
+  --cpu "${THREADS}" \
+  --tblout "${ANTIFAM_OUT}/antifam.tbl" \
+  "${ANTIFAM_DB}" \
+  "${AMP_FASTA}" \
+  > "${ANTIFAM_OUT}/antifam.log"
+
+# parse AntiFam hits
+awk '!/^#/ && NF > 0 {print $1}' "${ANTIFAM_OUT}/antifam.tbl" \
+  | sort -u \
+  > "${ANTIFAM_OUT}/antifam_hits.ids"
+
+# all smORF ids
+seqkit seq -n -i "${AMP_FASTA}" \
+  | sort -u \
+  > "${ANTIFAM_OUT}/all.ids"
+
+# remove AntiFam hits
+comm -23 "${ANTIFAM_OUT}/all.ids" "${ANTIFAM_OUT}/antifam_hits.ids" \
+  > "${ANTIFAM_OUT}/antifam_clean.ids"
+
+# extract AntiFam-clean smORFs
+seqkit grep \
+  -f "${ANTIFAM_OUT}/antifam_clean.ids" \
+  "${AMP_FASTA}" \
+  > "${ANTIFAM_OUT}/all_smorfs_10_100.nr.antifam_clean.faa"
+
+echo "Total smORFs:"
+wc -l "${ANTIFAM_OUT}/all.ids"
+
+echo "AntiFam hits:"
+wc -l "${ANTIFAM_OUT}/antifam_hits.ids"
+
+echo "AntiFam-clean smORFs:"
+grep -c "^>" "${ANTIFAM_OUT}/all_smorfs_10_100.nr.antifam_clean.faa"
+echo
+
+if [[ ! -s "${ANTIFAM_OUT}/all_smorfs_10_100.nr.antifam_clean.faa" ]]; then
+    echo "[ERROR] No sequences left after AntiFam filtering."
+    exit 1
+fi
+
+# =========================
+# STEP2: DIAMOND blastp against UniProt bacteria/archaea/virus
+# =========================
+echo "========== STEP2: DIAMOND blastp =========="
+
+diamond blastp \
+  -q "${ANTIFAM_OUT}/all_smorfs_10_100.nr.antifam_clean.faa" \
+  -d "${DIAMOND_DB}" \
+  -o "${BLASTP_OUT}/amp_vs_uniprot.tsv" \
+  -f 6 qseqid sseqid pident length qlen slen qcovhsp evalue bitscore stitle \
+  --evalue 1e-3 \
+  --max-target-seqs 10 \
+  --threads "${THREADS}" \
+  --sensitive
+
+echo "DIAMOND result:"
+echo "${BLASTP_OUT}/amp_vs_uniprot.tsv"
+echo
+
+# 如果 DIAMOND 没有任何 hit，直接退出，避免后续空文件报错
+if [[ ! -s "${BLASTP_OUT}/amp_vs_uniprot.tsv" ]]; then
+    echo "[WARN] No DIAMOND hits found. No smORFs retained by current blast-hit-based filtering strategy."
+    touch "${BLASTP_OUT}/blast_hit_ids.txt"
+    touch "${BLASTP_OUT}/remove_ids.txt"
+    touch "${BLASTP_OUT}/keep_ids.txt"
+    touch "${BLASTP_OUT}/smORF_prefiltered.faa"
+    echo "the finish time is:"
+    date
+    exit 0
+fi
+
+# =========================
+# STEP3: remove likely housekeeping / common functional proteins
+# =========================
+echo "========== STEP3: remove common functional proteins =========="
+
+cut -f1 "${BLASTP_OUT}/amp_vs_uniprot.tsv" \
+  | sort -u \
+  > "${BLASTP_OUT}/blast_hit_ids.txt"
+
+awk -F'\t' '
+BEGIN {
+    IGNORECASE=1
+}
+{
+    id=$1
+    title=$10
+    pident=$3
+    qcov=$7
+
+    total[id]++
+
+    if (title ~ /(ribosomal|translation initiation factor|elongation factor|release factor|tRNA synthetase|aminoacyl-tRNA synthetase|polymerase|helicase|topoisomerase|primase|transcriptase|recombinase|integrase|transposase|endonuclease|exonuclease|dehydrogenase|kinase|isomerase|mutase|oxidase|reductase|lyase|decarboxylase|synthase|synthetase|transferase|hydrolase|chaperone|heat shock|hsp|tubulin|actin|flagellin|fimbrial|pilin|atp synthase|nadh dehydrogenase|cytochrome|succinate dehydrogenase)/) {
+        bad_hit[id]++
+    }
+    else {
+        if (pident > 80 && qcov > 40) {
+            good_align[id] = 1
+        }
+    }
+}
+END {
+    for (id in total) {
+        if (bad_hit[id] == total[id] || !(id in good_align)) {
+            print id
+        }
+    }
+}
+' "${BLASTP_OUT}/amp_vs_uniprot.tsv" \
+  | sort -u \
+  > "${BLASTP_OUT}/remove_ids.txt"
+
+grep -v -F -f "${BLASTP_OUT}/remove_ids.txt" \
+  "${BLASTP_OUT}/blast_hit_ids.txt" \
+  > "${BLASTP_OUT}/keep_ids.txt"
+
+seqkit grep \
+  -f "${BLASTP_OUT}/keep_ids.txt" \
+  "${ANTIFAM_OUT}/all_smorfs_10_100.nr.antifam_clean.faa" \
+  > "${BLASTP_OUT}/smORF_prefiltered.faa"
+
+echo "Blast-hit smORFs:"
+wc -l "${BLASTP_OUT}/blast_hit_ids.txt"
+
+echo "Removed smORFs:"
+wc -l "${BLASTP_OUT}/remove_ids.txt"
+
+echo "Kept smORFs:"
+wc -l "${BLASTP_OUT}/keep_ids.txt"
+
+echo "Final prefiltered fasta:"
+echo "${BLASTP_OUT}/smORF_prefiltered.faa"
+grep -c "^>" "${BLASTP_OUT}/smORF_prefiltered.faa"
+
+echo "the finish time is:"
+date
+echo
+echo

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#PBS -N amp5_amp_similarity
+#PBS -l nodes=1:ppn=16,walltime=24:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o /public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression/logs/10_extract_proteins_amp_similarity.log
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression
+OUT="$ROOT/results/10_function_annotation"; mkdir -p "$OUT"; cd "$ROOT"
+python3 scripts/13_extract_reference_proteins.py --targets results/06_directed_reference/targets.tsv --output "$OUT/target_reference_proteins.faa" --summary "$OUT/protein_extraction_summary.tsv"
+python3 scripts/14_extract_expressed_amp_fasta.py --samples config/samples.tsv --reference /public3/labmember/qianqh/soil_amp_analysis/10_scAMP_8samples/01_reference/amp_reference_nr.faa --output "$OUT/expressed_amp_sequences.faa" --ids "$OUT/expressed_amp_ids.tsv"
+diamond makedb --in "$OUT/target_reference_proteins.faa" -d "$OUT/target_reference_proteins" --threads 16
+diamond blastp -q "$OUT/expressed_amp_sequences.faa" -d "$OUT/target_reference_proteins" -o "$OUT/amp_to_reference_proteins.tsv" \
+  --outfmt 6 qseqid sseqid pident length qlen slen qcovhsp evalue bitscore --threads 16 --more-sensitive --id 80 --query-cover 80 --evalue 1e-5 --max-target-seqs 100
+awk 'BEGIN{OFS="\t";print "gene_id","reason"}!seen[$2]++{print $2,"AMP_similarity_identity_ge80_query_coverage_ge80"}' "$OUT/amp_to_reference_proteins.tsv" > "$OUT/excluded_amp_similar_genes.tsv"
+date

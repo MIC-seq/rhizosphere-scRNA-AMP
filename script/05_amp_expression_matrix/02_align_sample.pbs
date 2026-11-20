@@ -1,0 +1,24 @@
+### define PBS arguments
+#PBS -N scamp_align
+#PBS -l nodes=1:ppn=16,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/10_scAMP_8samples
+CONFIG="$ROOT/00_config/samples.tsv"
+: "${SAMPLE:?Submit with qsub -v SAMPLE=<sample>}"
+row=$(awk -F'\t' -v s="$SAMPLE" 'NR>1 && $1==s {print; exit}' "$CONFIG")
+[[ -n "$row" ]] || { echo "Unknown sample: $SAMPLE" >&2; exit 2; }
+IFS=$'\t' read -r sample crop r1 r2 extracted whitelist species genus <<< "$row"
+for f in "$extracted" "$whitelist" "$species"; do [[ -s "$f" ]] || { echo "Missing input: $f" >&2; exit 2; }; done
+OUT="$ROOT/02_alignment/$sample"
+mkdir -p "$OUT"
+/public/home/qianqh/softpath/diamond blastx \
+  -d "$ROOT/01_reference/amp_reference_nr.dmnd" \
+  -q "$extracted" \
+  -o "$OUT/${sample}.unified_amp.m8.gz" \
+  -f 6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen \
+  --evalue 1e-5 --sensitive --id 70 --subject-cover 70 \
+  --max-target-seqs 25 --compress 1 --threads 16
+date

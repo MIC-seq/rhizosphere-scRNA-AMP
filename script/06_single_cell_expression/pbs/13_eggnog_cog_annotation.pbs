@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#PBS -N amp5_eggnog
+#PBS -l nodes=1:ppn=32,walltime=168:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o /public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression/logs/13_eggnog_cog_annotation.log
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression
+EMAPPER=/public/home/qianqh/softwares/eggnog-mapper-2.1.8/emapper.py
+PY=/public/home/qianqh/softwares/micromamba/envs/microbe_analysis/bin/python
+DATA=/public/home/qianqh/softwares/eggnog-mapper-2.1.8/data
+OUT="$ROOT/results/10_function_annotation/eggnog"
+mkdir -p "$OUT"
+export PATH=/public/home/qianqh/softwares/micromamba/envs/microbe_analysis/bin:$PATH
+"$PY" "$EMAPPER" -i "$ROOT/results/10_function_annotation/target_reference_proteins.faa" \
+  --itype proteins -m diamond --data_dir "$DATA" --cpu 32 --output target_reference \
+  --output_dir "$OUT" --override
+date

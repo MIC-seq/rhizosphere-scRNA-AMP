@@ -1,0 +1,107 @@
+###define PBS arguments
+#PBS -N star_rrna
+#PBS -l nodes=1:ppn=64,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o star_rrna_filter.log
+
+echo "the stating time is:"
+date
+hostname
+
+cd $PBS_O_WORKDIR
+
+# activte micromamba
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate metagenome
+
+THREADS=64
+STAR_INDEX=/public2/labmember/qianqh/sc_microbio/SortMeRNA_ref_db/STAR_ref_db
+
+# 原始测序文件所在目录
+DATADIR=$HOME/sc_data
+
+# 输出目录放在提交 PBS 脚本的当前目录下
+OUTDIR=$PBS_O_WORKDIR/1_star_rrna_out
+
+mkdir -p "${OUTDIR}"
+
+echo "Working directory: ${PBS_O_WORKDIR}"
+echo "Input directory  : ${DATADIR}"
+echo "Output directory : ${OUTDIR}"
+echo "STAR index       : ${STAR_INDEX}"
+echo "Threads          : ${THREADS}"
+echo
+
+for crop in rice soybean wheat
+do
+    cropdir="${DATADIR}/${crop}"
+
+    if [[ ! -d "${cropdir}" ]]; then
+        echo "[WARN] Directory not found, skip: ${cropdir}"
+        continue
+    fi
+
+    echo "========== Processing crop: ${crop} =========="
+
+    mkdir -p "${OUTDIR}/${crop}/non_rrna"
+    mkdir -p "${OUTDIR}/${crop}/star_log"
+
+    # 检查是否存在只有 R2、没有 R1 的样本
+    for r2_only in "${cropdir}"/*_2.fq.gz
+    do
+        sample_check=$(basename "${r2_only}" _2.fq.gz)
+        r1_check="${cropdir}/${sample_check}_1.fq.gz"
+
+        if [[ ! -f "${r1_check}" ]]; then
+            echo "[WARN] R2 exists but R1 missing: ${crop}/${sample_check}"
+        fi
+    done
+
+    # 处理完整双端样本
+    for r1 in "${cropdir}"/*_1.fq.gz
+    do
+        sample=$(basename "${r1}" _1.fq.gz)
+        r2="${cropdir}/${sample}_2.fq.gz"
+
+        if [[ ! -f "${r2}" ]]; then
+            echo "[WARN] R1 exists but R2 missing, skip sample: ${crop}/${sample}"
+            continue
+        fi
+
+        echo "Processing sample: ${crop}/${sample}"
+
+        STAR \
+          --runThreadN "${THREADS}" \
+          --genomeDir "${STAR_INDEX}" \
+          --readFilesIn "${r2}" \
+          --readFilesCommand zcat \
+          --outSAMtype None \
+          --outReadsUnmapped Fastx \
+          --alignIntronMax 1 \
+          --alignSJDBoverhangMin 1000 \
+          --outFilterMismatchNmax 10 \
+          --outFilterMismatchNoverLmax 0.2 \
+          --outFilterMultimapNmax 100 \
+          --seedSearchStartLmax 30 \
+          --outFileNamePrefix "${OUTDIR}/${crop}/star_log/${sample}_"
+
+        mv "${OUTDIR}/${crop}/star_log/${sample}_Unmapped.out.mate1" \
+           "${OUTDIR}/${crop}/non_rrna/${sample}_non_rRNA.R2.fq"
+
+        seqkit seq -n -i "${OUTDIR}/${crop}/non_rrna/${sample}_non_rRNA.R2.fq" \
+           > "${OUTDIR}/${crop}/star_log/${sample}_non_rRNA.ids"
+
+        seqkit grep -f "${OUTDIR}/${crop}/star_log/${sample}_non_rRNA.ids" "${r1}" \
+          -o "${OUTDIR}/${crop}/non_rrna/${sample}_non_rRNA.R1.fq"
+
+        echo "Finished sample: ${crop}/${sample}"
+        echo
+    done
+
+done
+
+echo "the finish time is:"
+date
+echo
+echo

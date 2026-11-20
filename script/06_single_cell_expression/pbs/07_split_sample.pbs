@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#PBS -N amp5_split
+#PBS -l nodes=1:ppn=2,walltime=72:00:00
+#PBS -q public3
+#PBS -j oe
+set -euo pipefail
+: "${SAMPLE:?}"
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression
+row=$(awk -F '\t' -v s="$SAMPLE" 'NR>1&&$1==s{print;exit}' "$ROOT/config/samples.tsv"); IFS=$'\t' read -r sample crop batch r1 r2 extracted whitelist species genus support amp <<< "$row"
+python3 "$ROOT/scripts/07_split_fastq_by_kraken_species.py" --config "$ROOT/config/config.json" --sample "$sample" --fastq "$extracted" --taxonomy "$ROOT/results/01_taxonomy/cell_taxonomy.tsv" --targets "$ROOT/results/06_directed_reference/targets.tsv" --outdir "$ROOT/results/06_directed_fastq/$sample"

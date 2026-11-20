@@ -1,0 +1,18 @@
+### define PBS arguments
+#PBS -N scamp_count
+#PBS -l nodes=1:ppn=4,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/10_scAMP_8samples
+: "${SAMPLE:?Submit with qsub -v SAMPLE=<sample>}"
+row=$(awk -F'\t' -v s="$SAMPLE" 'NR>1 && $1==s {print; exit}' "$ROOT/00_config/samples.tsv")
+IFS=$'\t' read -r sample crop r1 r2 extracted whitelist species genus <<< "$row"
+for mode in primary sensitivity; do
+  python3 "$ROOT/scripts/count_amp_umis.py" \
+    --hits "$ROOT/02_alignment/$sample/${sample}.unified_amp.m8.gz" \
+    --whitelist "$whitelist" --sample "$sample" --mode "$mode" \
+    --outdir "$ROOT/03_matrix/$sample"
+done
+date

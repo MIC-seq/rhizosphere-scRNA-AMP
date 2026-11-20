@@ -1,0 +1,194 @@
+### define PBS arguments
+#PBS -N nr_macrel
+#PBS -l nodes=1:ppn=64,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o nr_macrel.log
+
+set -euo pipefail
+shopt -s nullglob
+
+echo "the starting time is:"
+date
+hostname
+
+cd "$PBS_O_WORKDIR"
+
+# activate micromamba
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate metagenome
+
+# =========================
+# parameters
+# =========================
+THREADS=64
+
+ORF_DIR="${PBS_O_WORKDIR}/3_td_orf"
+NR_DIR="${PBS_O_WORKDIR}/4_nr"
+MACREL_OUT="${PBS_O_WORKDIR}/5_macrel"
+
+mkdir -p "${NR_DIR}"
+
+echo "Working directory: ${PBS_O_WORKDIR}"
+echo "ORF directory    : ${ORF_DIR}"
+echo "NR directory     : ${NR_DIR}"
+echo "Macrel output    : ${MACREL_OUT}"
+echo "Threads          : ${THREADS}"
+echo
+
+if [[ ! -d "${ORF_DIR}" ]]; then
+    echo "[ERROR] ORF directory not found: ${ORF_DIR}"
+    exit 1
+fi
+
+# 如果重复运行，为避免旧结果干扰，清理 mmseqs 临时结果和 macrel 输出
+# 如果不想覆盖旧结果，可以注释掉下面两行
+rm -rf "${NR_DIR}/tmp_nr"
+rm -rf "${MACREL_OUT}"
+
+# =========================
+# merge peptide data
+# =========================
+ALL_PEP="${NR_DIR}/all_smorfs.tagged.faa"
+> "${ALL_PEP}"
+
+for crop in rice soybean wheat
+do
+    CROP_ORF_DIR="${ORF_DIR}/${crop}"
+
+    if [[ ! -d "${CROP_ORF_DIR}" ]]; then
+        echo "[WARN] Crop ORF directory not found, skip: ${CROP_ORF_DIR}"
+        continue
+    fi
+
+    echo "========== Merging crop: ${crop} =========="
+
+    for sample_dir in "${CROP_ORF_DIR}"/*
+    do
+        if [[ ! -d "${sample_dir}" ]]; then
+            continue
+        fi
+
+        sample=$(basename "${sample_dir}")
+        pep="${sample_dir}/nonoverlap.pep"
+
+        if [[ ! -s "${pep}" ]]; then
+            echo "[WARN] ${pep} not found or empty, skip"
+            continue
+        fi
+
+        echo "Adding peptide file: ${crop}/${sample}"
+
+        awk -v crop="${crop}" -v sample="${sample}" '
+            /^>/ {
+                header=$0
+                sub(/^>/, "", header)
+                split(header, a, " ")
+                print ">" crop "_" sample "_" a[1]
+                next
+            }
+            {
+                print
+            }
+        ' "${pep}" >> "${ALL_PEP}"
+
+    done
+done
+
+if [[ ! -s "${ALL_PEP}" ]]; then
+    echo "[ERROR] No peptide sequences merged: ${ALL_PEP}"
+    exit 1
+fi
+
+echo
+echo "Merged peptide file:"
+echo "${ALL_PEP}"
+echo "Sequence number:"
+grep -c "^>" "${ALL_PEP}"
+echo
+
+# =========================
+# mmseqs non-redundant clustering
+# =========================
+echo "========== Running MMseqs2 clustering =========="
+
+mmseqs createdb \
+    "${ALL_PEP}" \
+    "${NR_DIR}/all_smorfs_DB"
+
+mmseqs cluster \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB_clu" \
+    "${NR_DIR}/tmp_nr" \
+    --min-seq-id 0.9 \
+    -c 0.9 \
+    --cov-mode 1 \
+    --threads "${THREADS}"
+
+mmseqs createtsv \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB_clu" \
+    "${NR_DIR}/all_smorfs_DB_clu.tsv"
+
+mmseqs createseqfiledb \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB_clu" \
+    "${NR_DIR}/all_smorfs_DB_clu_seq"
+
+mmseqs result2flat \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB_clu_seq" \
+    "${NR_DIR}/all_smorfs.clusters.faa"
+
+mmseqs createsubdb \
+    "${NR_DIR}/all_smorfs_DB_clu" \
+    "${NR_DIR}/all_smorfs_DB" \
+    "${NR_DIR}/all_smorfs_DB_clu_rep"
+
+mmseqs convert2fasta \
+    "${NR_DIR}/all_smorfs_DB_clu_rep" \
+    "${NR_DIR}/all_smorfs.nr.faa"
+
+echo
+echo "Non-redundant peptide number before length filtering:"
+grep -c "^>" "${NR_DIR}/all_smorfs.nr.faa"
+echo
+
+# =========================
+# length filtering: 10-100 aa
+# =========================
+seqkit seq \
+    -m 10 \
+    -M 100 \
+    "${NR_DIR}/all_smorfs.nr.faa" \
+    > "${NR_DIR}/all_smorfs_10_100.nr.faa"
+
+echo "Non-redundant peptide number after 10-100 aa filtering:"
+grep -c "^>" "${NR_DIR}/all_smorfs_10_100.nr.faa"
+echo
+
+if [[ ! -s "${NR_DIR}/all_smorfs_10_100.nr.faa" ]]; then
+    echo "[ERROR] No peptide sequences left after length filtering."
+    exit 1
+fi
+
+# =========================
+# Macrel AMP prediction
+# =========================
+echo "========== Running Macrel AMP prediction =========="
+
+macrel peptides \
+    --fasta "${NR_DIR}/all_smorfs_10_100.nr.faa" \
+    --out "${MACREL_OUT}" \
+    --threads "${THREADS}"
+
+echo
+echo "Macrel output directory:"
+echo "${MACREL_OUT}"
+
+echo "the finish time is:"
+date
+echo
+echo

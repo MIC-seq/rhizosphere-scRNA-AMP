@@ -1,0 +1,32 @@
+{
+  "species": [
+    "Chloracidobacterium validum",
+    "Halomonas sp. JS92-SW72",
+    "Pseudomonas aeruginosa"
+  ],
+  "embedding": {
+    "random_seed": 20260722,
+    "min_gene_detection_cells": 5,
+    "min_cog_detection_cells": 10,
+    "gene_variable_features": 500,
+    "max_pca_dimensions": 10,
+    "umap_neighbors": 15,
+    "umap_min_dist": 0.3,
+    "cluster_resolution": 0.3
+  },
+  "association": {
+    "min_cells_per_sample_species": 20,
+    "min_samples": 3,
+    "fdr": 0.05,
+    "minimum_amp_cluster_cells": 10,
+    "minimum_individual_amp_cells": 20,
+    "minimum_individual_amp_samples": 3,
+    "minimum_major_amp_program_cells": 20,
+    "stratified_permutations": 2000,
+    "amp_state_prediction_features": 100,
+    "amp_state_prediction_permutations": 500
+  },
+  "inputs": {
+    "amp_matrix_root": "/path/to/amp_expression/03_matrix"
+  }
+}

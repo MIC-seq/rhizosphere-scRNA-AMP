@@ -1,0 +1,124 @@
+### define PBS arguments
+#PBS -N td_orf
+#PBS -l nodes=1:ppn=32,walltime=1000:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o td_orf_smRNA.log
+
+set -euo pipefail
+shopt -s nullglob
+
+echo "the starting time is:"
+date
+hostname
+
+cd "$PBS_O_WORKDIR"
+
+# activate micromamba
+eval "$(micromamba shell hook --shell bash)"
+micromamba activate metatranscriptome
+
+THREADS=32
+
+# =========================
+# input and output dirs
+# =========================
+ASM_BASEDIR="${PBS_O_WORKDIR}/2_assembly_rnaspades"
+ORF_BASEDIR="${PBS_O_WORKDIR}/3_td_orf"
+
+FILTER_SCRIPT="${PBS_O_WORKDIR}/filter_nonoverlap_orf.py"
+
+mkdir -p "${ORF_BASEDIR}"
+
+echo "Working directory : ${PBS_O_WORKDIR}"
+echo "Assembly directory: ${ASM_BASEDIR}"
+echo "ORF output dir    : ${ORF_BASEDIR}"
+echo "Filter script     : ${FILTER_SCRIPT}"
+echo
+
+if [[ ! -f "${FILTER_SCRIPT}" ]]; then
+    echo "[ERROR] filter_nonoverlap_orf.py not found: ${FILTER_SCRIPT}"
+    exit 1
+fi
+
+# =========================
+# crop samples
+# =========================
+for crop in rice soybean wheat
+do
+    echo "========== Processing crop: ${crop} =========="
+
+    CROP_ASM_DIR="${ASM_BASEDIR}/${crop}"
+    CROP_ORF_DIR="${ORF_BASEDIR}/${crop}"
+
+    if [[ ! -d "${CROP_ASM_DIR}" ]]; then
+        echo "[WARN] Assembly directory not found, skip: ${CROP_ASM_DIR}"
+        continue
+    fi
+
+    mkdir -p "${CROP_ORF_DIR}"
+
+    for asm_dir in "${CROP_ASM_DIR}"/rnaspades_*
+    do
+        if [[ ! -d "${asm_dir}" ]]; then
+            continue
+        fi
+
+        sample=$(basename "${asm_dir}" | sed 's/^rnaspades_//')
+
+        INFA="${asm_dir}/transcripts.fasta"
+        OUTDIR="${CROP_ORF_DIR}/${sample}"
+
+        if [[ ! -s "${INFA}" ]]; then
+            echo "[WARN] transcripts.fasta not found or empty, skip: ${crop}/${sample}"
+            continue
+        fi
+
+        mkdir -p "${OUTDIR}"
+
+        echo "Processing sample getorf: ${crop}/${sample}"
+        echo "Input fasta: ${INFA}"
+        echo "Output dir : ${OUTDIR}"
+
+        # =========================
+        # TransDecoder ORF prediction
+        # =========================
+        if [[ ! -s "${OUTDIR}/transcripts.fasta.transdecoder.gff3" ]]; then
+
+            TransDecoder.LongOrfs \
+                -t "${INFA}" \
+                -m 10 \
+                -O "${OUTDIR}"
+
+            TransDecoder.Predict \
+                -t "${INFA}" \
+                --single_best_only \
+                --cpu "${THREADS}" \
+                -O "${OUTDIR}"
+
+        else
+            echo "[SKIP] TransDecoder result exists: ${OUTDIR}/transcripts.fasta.transdecoder.gff3"
+        fi
+
+        # =========================
+        # filter non-overlap ORFs
+        # =========================
+        python "${FILTER_SCRIPT}" \
+            "${OUTDIR}/transcripts.fasta.transdecoder.gff3" \
+            "${OUTDIR}/nonoverlap.cds.gff"
+
+        gffread "${OUTDIR}/nonoverlap.cds.gff" \
+            -g "${INFA}" \
+            -y "${OUTDIR}/nonoverlap.pep" \
+            -x "${OUTDIR}/nonoverlap.cds.fa"
+
+        echo "Finished sample: ${crop}/${sample}"
+        echo
+    done
+
+done
+
+echo "the finish time is:"
+date
+echo
+echo

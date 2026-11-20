@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#PBS -N amp5_dir_refs
+#PBS -l nodes=1:ppn=8,walltime=24:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o /public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression/logs/06_build_directed_references.log
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression; D="$ROOT/results/06_directed_reference"
+cd "$ROOT"; date; hostname
+python3 scripts/06_prepare_directed_targets.py --config config/config.json --species results/01_taxonomy/species_selection.tsv --assemblies results/02_refseq/selected_refseq_assemblies.tsv --outdir "$D"
+tail -n +2 "$D/targets.tsv" | while IFS=$'\t' read -r tax sp acc dir manifest total counts; do
+  python3 scripts/03_build_combined_reference.py --assemblies "$manifest" --outdir "$dir/reference"
+  mkdir -p "$dir/STAR_index"
+  STAR --runThreadN 8 --runMode genomeGenerate --genomeDir "$dir/STAR_index" --genomeFastaFiles "$dir/reference/combined_genome.fa" --genomeSAindexNbases 10 --limitGenomeGenerateRAM 30000000000
+done
+date

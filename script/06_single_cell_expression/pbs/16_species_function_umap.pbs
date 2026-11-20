@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#PBS -N amp5_function_umap
+#PBS -l nodes=1:ppn=8,walltime=24:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o /public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression/logs/16_species_function_umap.log
+set -euo pipefail
+
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression
+R=/public/home/qianqh/VITAfunc/VITAfunc.v1.0.0/VITAFUNC/bin/Rscript
+cd "$ROOT"
+"$R" scripts/24_species_function_umap.R \
+  config/integrated_amp_function.json \
+  results/12_integrated_amp_function/species_matrices \
+  results/12_integrated_amp_function/species_embeddings
+date

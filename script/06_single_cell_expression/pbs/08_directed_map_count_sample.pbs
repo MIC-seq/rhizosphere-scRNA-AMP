@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#PBS -N amp5_dir_map
+#PBS -l nodes=1:ppn=16,walltime=168:00:00
+#PBS -q public3
+#PBS -j oe
+set -euo pipefail
+: "${SAMPLE:?submit with qsub -v SAMPLE=<id>}"
+
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression
+SPLIT="$ROOT/results/06_directed_fastq/$SAMPLE"
+REFROOT="$ROOT/results/06_directed_reference"
+OUT="$ROOT/results/07_directed_mapping/$SAMPLE"
+TMP="$OUT/tmp"
+mkdir -p "$OUT" "$TMP"
+
+row=$(awk -F '\t' -v s="$SAMPLE" 'NR>1 && $1==s{print;exit}' "$ROOT/config/samples.tsv")
+[[ -n "$row" ]] || { echo "unknown sample $SAMPLE" >&2; exit 2; }
+IFS=$'\t' read -r sample crop batch r1 r2 extracted whitelist species genus support amp <<< "$row"
+MIN_CELLS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["directed_mapping"]["minimum_target_cells_per_sample"])' "$ROOT/config/config.json")
+
+: > "$TMP/all_molecules.tsv"
+: > "$TMP/included_barcodes.tsv"
+printf 'sample\tassembly_accession\ttarget_cells\tinput_reads\tunique_reads\tunique_rate\tmultimap_rate\ttoo_many_rate\tmolecules_assigned\n' > "$OUT/${SAMPLE}_target_mapping_qc.tsv"
+
+shopt -s nullglob
+for fq in "$SPLIT"/*.fq.gz; do
+    acc=$(basename "$fq" .fq.gz)
+    ncell=$(awk -F '\t' -v a="$acc" 'NR>1 && $1==a{n++} END{print n+0}' "$SPLIT/target_barcodes.tsv")
+    if (( ncell < MIN_CELLS )); then
+        echo "skip $acc: target_cells=$ncell < $MIN_CELLS"
+        continue
+    fi
+    ref="$REFROOT/$acc"
+    [[ -s "$ref/STAR_index/Genome" && -s "$ref/reference/combined_annotation.gtf" ]] || { echo "incomplete reference $acc" >&2; exit 3; }
+    work="$TMP/$acc"; mkdir -p "$work"
+    awk -F '\t' -v a="$acc" 'NR>1 && $1==a{print $2}' "$SPLIT/target_barcodes.tsv" > "$work/whitelist.txt"
+    cat "$work/whitelist.txt" >> "$TMP/included_barcodes.tsv"
+
+    STAR --runThreadN 16 --genomeDir "$ref/STAR_index" --readFilesIn "$fq" --readFilesCommand zcat \
+      --outSAMtype BAM Unsorted --outFileNamePrefix "$work/" --outFilterMultimapNmax 20 --winAnchorMultimapNmax 50 \
+      --outSAMmultNmax 1 --alignIntronMax 1 --alignMatesGapMax 1 --alignSJoverhangMin 1000 --alignSJDBoverhangMin 1000 \
+      --outSAMattributes NH HI AS nM --outReadsUnmapped None
+    samtools view -@ 16 -b -q 255 -o "$work/unique.bam" "$work/Aligned.out.bam"
+    featureCounts -T 16 -t gene -g gene_id -a "$ref/reference/combined_annotation.gtf" \
+      -o "$work/featureCounts.txt" -R CORE --Rpath "$work" "$work/unique.bam"
+    core="$work/unique.bam.featureCounts"
+    python3 "$ROOT/scripts/04_quantify_umis.py" extract --core "$core" --whitelist "$work/whitelist.txt" \
+      --output "$work/triples.tsv" --qc "$work/molecule_qc.tsv"
+    LC_ALL=C sort -T "$work" -S 16G -u -k1,1 -k2,2 -k3,3 "$work/triples.tsv" > "$work/triples.sorted.tsv"
+    python3 "$ROOT/scripts/04_quantify_umis.py" resolve --input "$work/triples.sorted.tsv" \
+      --output "$work/molecules.tsv" --qc "$work/molecule_qc.tsv"
+    cat "$work/molecules.tsv" >> "$TMP/all_molecules.tsv"
+
+    input=$(awk -F '|' '/Number of input reads/{gsub(/[ \t]/,"",$2);print $2}' "$work/Log.final.out")
+    unique=$(awk -F '|' '/Uniquely mapped reads number/{gsub(/[ \t]/,"",$2);print $2}' "$work/Log.final.out")
+    urate=$(awk -F '|' '/Uniquely mapped reads %/{gsub(/[ \t%]/,"",$2);print $2}' "$work/Log.final.out")
+    mrate=$(awk -F '|' '/% of reads mapped to multiple loci/{gsub(/[ \t%]/,"",$2);print $2}' "$work/Log.final.out")
+    trate=$(awk -F '|' '/% of reads mapped to too many loci/{gsub(/[ \t%]/,"",$2);print $2}' "$work/Log.final.out")
+    mol=$(awk -F '\t' '$1=="molecules_assigned"{print $2}' "$work/molecule_qc.tsv")
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$SAMPLE" "$acc" "$ncell" "$input" "$unique" "$urate" "$mrate" "$trate" "${mol:-0}" >> "$OUT/${SAMPLE}_target_mapping_qc.tsv"
+    gzip -1 -f "$core" "$work/molecule_qc.tsv"
+    rm -f "$work/Aligned.out.bam" "$work/unique.bam" "$work/triples.tsv" "$work/triples.sorted.tsv" "$work/molecules.tsv"
+done
+
+LC_ALL=C sort -u "$TMP/included_barcodes.tsv" > "$OUT/${SAMPLE}_directed_whitelist.tsv"
+LC_ALL=C sort -T "$TMP" -S 24G -k1,1 -k2,2 "$TMP/all_molecules.tsv" | \
+  awk -F '\t' 'BEGIN{OFS="\t"} NR==1{g=$1;c=$2;n=$3;next} $1==g&&$2==c{n+=$3;next}{print g,c,n;g=$1;c=$2;n=$3} END{if(NR)print g,c,n}' \
+  > "$OUT/${SAMPLE}_gene_cell_counts.tsv"
+python3 "$ROOT/scripts/04_quantify_umis.py" build --counts "$OUT/${SAMPLE}_gene_cell_counts.tsv" \
+  --annotation "$REFROOT/gene_annotation_targets.tsv" --whitelist "$OUT/${SAMPLE}_directed_whitelist.tsv" --sample "$SAMPLE" \
+  --raw-matrix "$OUT/matrix.raw.mtx.gz" --non-rrna-matrix "$OUT/matrix.non_rrna.mtx.gz" \
+  --features "$OUT/features.tsv.gz" --barcodes "$OUT/barcodes.tsv.gz" --cell-qc "$OUT/${SAMPLE}_cell_qc.tsv" \
+  --species-umi "$OUT/${SAMPLE}_species_umi.tsv.gz"
+gzip -1 -f "$OUT/${SAMPLE}_gene_cell_counts.tsv"
+rm -f "$TMP/all_molecules.tsv" "$TMP/included_barcodes.tsv"
+date

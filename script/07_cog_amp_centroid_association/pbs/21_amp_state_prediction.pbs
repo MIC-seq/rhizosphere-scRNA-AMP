@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#PBS -N amp_state_predict
+#PBS -l nodes=1:ppn=4,walltime=12:00:00
+#PBS -q public3
+#PBS -j oe
+#PBS -o /public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression/logs/21_amp_state_prediction.log
+set -euo pipefail
+ROOT=/public3/labmember/qianqh/soil_amp_analysis/11_species_gene_expression
+R=/public/home/qianqh/VITAfunc/VITAfunc.v1.0.0/VITAFUNC/bin/Rscript
+OUT="$ROOT/results/12_integrated_amp_function/figure5_optimized/amp_state_prediction"
+cd "$ROOT";mkdir -p "$OUT"
+"$R" scripts/30_amp_expression_predicts_functional_state.R "$ROOT" config/integrated_amp_function.json "$OUT"
+date
